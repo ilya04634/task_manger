@@ -4,7 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db import models
 from .models import Project, Task, User, ChatRoom, TaskAttachment
-from .serializers import ProjectSerializer, TaskSerializer
+from .serializers import ProjectSerializer, TaskSerializer, ChangePasswordSerializer
 from .permissions import IsSuperUserOrProjectMember, IsProjectAdminOrReadOnly
 from rest_framework.decorators import action
 from rest_framework import generics
@@ -16,7 +16,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from .services import send_push_notification
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, inline_serializer
 from rest_framework import serializers
-
+from rest_framework.permissions import AllowAny
+from .serializers import UserRegistrationSerializer, ProfileSerializer
 
 @extend_schema_view(
     list=extend_schema(summary="Список проектов", description="Возвращает список проектов пользователя. Суперюзер видит все."),
@@ -290,3 +291,58 @@ class RegisterDeviceTokenView(APIView):
             FCMDeviceToken.objects.get_or_create(user=request.user, token=token)
             return Response({"status": "Токен сохранен"})
         return Response({"error": "Токен не передан"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@extend_schema(
+    summary="Регистрация",
+    description="Создание нового аккаунта. Токен передавать не нужно.",
+    tags=["Auth"]
+)
+class RegisterView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    # Разрешаем доступ неавторизованным пользователям
+    permission_classes = [AllowAny]
+    serializer_class = UserRegistrationSerializer
+
+
+@extend_schema(
+    summary="Мой профиль",
+    description="Получение, обновление или удаление текущего аккаунта.",
+    tags=["Profile"]
+)
+class ManageProfileView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ProfileSerializer
+    permission_classes = [IsAuthenticated]
+    # Добавляем парсеры, чтобы юзер мог загрузить аватарку (multipart/form-data)
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_object(self):
+        # Вместо поиска по ID, мы всегда возвращаем того юзера, чей токен пришел в запросе
+        return self.request.user
+
+
+@extend_schema(
+    summary="Смена пароля",
+    description="Требует текущий пароль для подтверждения.",
+    tags=["Profile"]
+)
+class ChangePasswordView(views.APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChangePasswordSerializer
+
+    def post(self, request):
+        user = request.user
+        serializer = self.serializer_class(data=request.data)
+
+        if serializer.is_valid():
+            # Проверяем старый пароль
+            if not user.check_password(serializer.validated_data.get('old_password')):
+                return Response({"old_password": ["Неверный текущий пароль."]}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Устанавливаем новый
+            user.set_password(serializer.validated_data.get('new_password'))
+            user.save()
+            return Response({"status": "Пароль успешно изменен"}, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

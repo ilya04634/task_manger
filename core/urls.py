@@ -3,10 +3,14 @@ from django.urls import path, include
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from django.conf import settings
 from django.conf.urls.static import static
+from api.views import RegisterView, ManageProfileView
+from api.views import ChangePasswordView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
-
+    path('api/auth/register/', RegisterView.as_view(), name='register'),
+    path('api/users/me/', ManageProfileView.as_view(), name='manage_profile'),
+path('api/users/me/change-password/', ChangePasswordView.as_view(), name='change_password'),
     # Генерация схемы
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     # Сам интерфейс Swagger

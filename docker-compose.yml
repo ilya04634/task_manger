@@ -17,11 +17,18 @@ services:
 
   web:
     build: .
-    # Запускаем Gunicorn с воркерами Uvicorn для поддержки WebSockets
+    # Используй python manage.py runserver 0.0.0.0:8000 для разработки,
+    # если тебе нужен авторелоад кода. Gunicorn хорош для деплоя.
     command: gunicorn core.asgi:application -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 4
-    volumes:
+    volumes:                   # <-- Добавлено для разработки
       - static_volume:/app/static
       - media_volume:/app/media
+    environment:                     # <-- Добавь эти данные в settings.py
+      - DB_HOST=db
+      - DB_NAME=task_db
+      - DB_USER=task_user
+      - DB_PASS=supersecretpassword
+      - REDIS_HOST=redis
     depends_on:
       - db
       - redis
@@ -42,4 +49,4 @@ services:
 volumes:
   postgres_data:
   static_volume:
-  media_volume:data:
+  media_volume:

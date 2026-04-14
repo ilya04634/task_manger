@@ -1,3 +1,4 @@
+import firebase_admin
 from firebase_admin import messaging
 from .models import FCMDeviceToken
 
@@ -6,11 +7,15 @@ def send_push_notification(user, title, body, data=None):
     """
     Функция для отправки push-уведомления конкретному пользователю.
     """
-    # Получаем все токены устройств этого пользователя
+    # Защита: если Firebase не настроен (нет ключа), просто выходим
+    if not firebase_admin._apps:
+        print(f"[{user.username}] Пуш пропущен: Firebase не инициализирован.")
+        return
+
     tokens = FCMDeviceToken.objects.filter(user=user).values_list('token', flat=True)
 
     if not tokens:
-        return  # У пользователя нет зарегистрированных устройств
+        return
 
     # Формируем сообщение
     message = messaging.MulticastMessage(

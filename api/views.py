@@ -18,6 +18,9 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiPara
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from .serializers import UserRegistrationSerializer, ProfileSerializer
+from django.db import transaction
+from .models import FriendRequest, ChatRoom
+from .serializers import FriendRequestSerializer
 
 @extend_schema_view(
     list=extend_schema(summary="Список проектов", description="Возвращает список проектов пользователя. Суперюзер видит все."),
@@ -346,3 +349,88 @@ class ChangePasswordView(views.APIView):
             return Response({"status": "Пароль успешно изменен"}, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SendFriendRequestView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, username):
+        to_user = get_object_or_404(User, username=username)
+
+        if request.user == to_user:
+            return Response({"error": "Нельзя добавить себя в друзья."}, status=400)
+
+        if request.user.friends.filter(id=to_user.id).exists():
+            return Response({"error": "Пользователь уже у вас в друзьях."}, status=400)
+
+        # get_or_create защищает от спама одинаковыми заявками
+        request_obj, created = FriendRequest.objects.get_or_create(
+            from_user=request.user,
+            to_user=to_user,
+            defaults={'status': 'PENDING'}
+        )
+
+        if not created and request_obj.status == 'PENDING':
+            return Response({"error": "Заявка уже была отправлена ранее."}, status=400)
+
+        if created:
+            send_push_notification(
+                user=to_user,  # Кому отправляем
+                title="Новая заявка в друзья!",
+                body=f"Пользователь {request.user.username} хочет добавить вас в друзья.",
+                data={
+                    "type": "FRIEND_REQUEST",
+                    "from_user": request.user.username
+                }
+            )
+        return Response({"message": "Заявка успешно отправлена!"}, status=201)
+
+
+# 2. Посмотреть входящие заявки
+class IncomingRequestsView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = FriendRequestSerializer
+
+    def get_queryset(self):
+        # Возвращаем только те заявки, которые висят в ожидании и адресованы нам
+        return FriendRequest.objects.filter(to_user=self.request.user, status='PENDING')
+
+
+# 3. Принять или отклонить заявку (Магия создания чата здесь)
+class RespondFriendRequestView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, action):
+        # Ищем заявку (только входящую и только в статусе ожидания)
+        friend_request = get_object_or_404(FriendRequest, id=pk, to_user=request.user, status='PENDING')
+
+        if action == 'reject':
+            friend_request.status = 'REJECTED'
+            friend_request.save()
+            return Response({"message": "Заявка отклонена."})
+
+        elif action == 'accept':
+            # transaction.atomic гарантирует, что если что-то сломается на полпути, база не повредится
+            with transaction.atomic():
+                friend_request.status = 'ACCEPTED'
+                friend_request.save()
+
+                # 1. Добавляем в друзья (Django сам добавит обоюдно благодаря symmetrical=True)
+                request.user.friends.add(friend_request.from_user)
+
+                # 2. Создаем приватную комнату чата
+                chat = ChatRoom.objects.create(is_group=False)
+                chat.participants.add(request.user, friend_request.from_user)
+
+            return Response({"message": "Заявка принята, приватный чат создан!"})
+
+        return Response({"error": "Неверное действие. Используйте 'accept' или 'reject'."}, status=400)
+
+
+# 4. Получить список текущих друзей
+class ListFriendsView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserSerializer  # Используем обычный сериализатор юзера
+
+    def get_queryset(self):
+        return self.request.user.friends.all()

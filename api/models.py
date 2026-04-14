@@ -11,7 +11,7 @@ class User(AbstractUser):
     # Глобальная роль юзера в приложении
     role = models.CharField(max_length=15, choices=ROLE_CHOICES, default='USER')
 
-    friends = models.ManyToManyField('self', blank=True, symmetrical=True)
+    friends = models.ManyToManyField("self", blank=True, symmetrical=True)
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
 
     def __str__(self):
@@ -88,3 +88,26 @@ class FCMDeviceToken(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='fcm_tokens')
     token = models.CharField(max_length=255, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class FriendRequest(models.Model):
+    STATUS_CHOICES = (
+        ('PENDING', 'Ожидание'),
+        ('ACCEPTED', 'Принято'),
+        ('REJECTED', 'Отклонено'),
+    )
+
+    from_user = models.ForeignKey(
+        User, related_name='outgoing_requests', on_delete=models.CASCADE
+    )
+    to_user = models.ForeignKey(
+        User, related_name='incoming_requests', on_delete=models.CASCADE
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('from_user', 'to_user') # Запрет дубликатов заявок
+
+    def __str__(self):
+        return f"{self.from_user} -> {self.to_user} ({self.status})"

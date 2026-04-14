@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import Project, Task
 from .models import Project, Task, ChatRoom, Message
 from .models import Project, Task, ChatRoom, Message, TaskAttachment
+from .models import FriendRequest
 
 
 User = get_user_model()
@@ -124,3 +125,15 @@ class ProfileSerializer(serializers.ModelSerializer):
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True, write_only=True)
     new_password = serializers.CharField(required=True, write_only=True)
+
+
+
+
+
+class FriendRequestSerializer(serializers.ModelSerializer):
+    # Вкладываем сериализатор юзера, чтобы получить полные данные отправителя
+    from_user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = FriendRequest
+        fields = ['id', 'from_user', 'to_user', 'status', 'created_at']

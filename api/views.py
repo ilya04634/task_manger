@@ -21,6 +21,8 @@ from .serializers import UserRegistrationSerializer, ProfileSerializer
 from django.db import transaction
 from .models import FriendRequest, ChatRoom
 from .serializers import FriendRequestSerializer
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from drf_spectacular.types import OpenApiTypes
 
 @extend_schema_view(
     list=extend_schema(summary="Список проектов", description="Возвращает список проектов пользователя. Суперюзер видит все."),
@@ -351,9 +353,20 @@ class ChangePasswordView(views.APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# --- СОЦИАЛЬНАЯ ЧАСТЬ (ДРУЗЬЯ И ЗАЯВКИ) ---
+
 class SendFriendRequestView(views.APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Отправить заявку в друзья",
+        description="Отправляет пользователю заявку в друзья. Автоматически шлет Push-уведомление получателю.",
+        responses={
+            201: OpenApiResponse(description="Заявка успешно отправлена!"),
+            400: OpenApiResponse(description="Ошибка: Нельзя добавить себя / Уже в друзьях / Заявка уже отправлена"),
+            404: OpenApiResponse(description="Пользователь не найден")
+        }
+    )
     def post(self, request, username):
         to_user = get_object_or_404(User, username=username)
 
@@ -363,7 +376,6 @@ class SendFriendRequestView(views.APIView):
         if request.user.friends.filter(id=to_user.id).exists():
             return Response({"error": "Пользователь уже у вас в друзьях."}, status=400)
 
-        # get_or_create защищает от спама одинаковыми заявками
         request_obj, created = FriendRequest.objects.get_or_create(
             from_user=request.user,
             to_user=to_user,
@@ -373,35 +385,45 @@ class SendFriendRequestView(views.APIView):
         if not created and request_obj.status == 'PENDING':
             return Response({"error": "Заявка уже была отправлена ранее."}, status=400)
 
+        # Отправка уведомления
         if created:
             send_push_notification(
-                user=to_user,  # Кому отправляем
+                user=to_user,
                 title="Новая заявка в друзья!",
                 body=f"Пользователь {request.user.username} хочет добавить вас в друзья.",
-                data={
-                    "type": "FRIEND_REQUEST",
-                    "from_user": request.user.username
-                }
+                data={"type": "FRIEND_REQUEST", "from_user": request.user.username}
             )
+
         return Response({"message": "Заявка успешно отправлена!"}, status=201)
 
 
-# 2. Посмотреть входящие заявки
+@extend_schema_view(
+    get=extend_schema(
+        summary="Входящие заявки в друзья",
+        description="Возвращает список заявок (в статусе PENDING), которые отправили текущему пользователю."
+    )
+)
 class IncomingRequestsView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = FriendRequestSerializer
 
     def get_queryset(self):
-        # Возвращаем только те заявки, которые висят в ожидании и адресованы нам
         return FriendRequest.objects.filter(to_user=self.request.user, status='PENDING')
 
 
-# 3. Принять или отклонить заявку (Магия создания чата здесь)
 class RespondFriendRequestView(views.APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        summary="Принять или отклонить заявку",
+        description="В URL передается ID заявки и действие (`accept` или `reject`). При `accept` пользователи становятся друзьями и создается приватный чат.",
+        responses={
+            200: OpenApiResponse(description="Успешно (Заявка принята / отклонена)"),
+            400: OpenApiResponse(description="Неверное действие (нужно accept/reject)"),
+            404: OpenApiResponse(description="Заявка не найдена или уже обработана")
+        }
+    )
     def post(self, request, pk, action):
-        # Ищем заявку (только входящую и только в статусе ожидания)
         friend_request = get_object_or_404(FriendRequest, id=pk, to_user=request.user, status='PENDING')
 
         if action == 'reject':
@@ -410,15 +432,12 @@ class RespondFriendRequestView(views.APIView):
             return Response({"message": "Заявка отклонена."})
 
         elif action == 'accept':
-            # transaction.atomic гарантирует, что если что-то сломается на полпути, база не повредится
             with transaction.atomic():
                 friend_request.status = 'ACCEPTED'
                 friend_request.save()
 
-                # 1. Добавляем в друзья (Django сам добавит обоюдно благодаря symmetrical=True)
                 request.user.friends.add(friend_request.from_user)
 
-                # 2. Создаем приватную комнату чата
                 chat = ChatRoom.objects.create(is_group=False)
                 chat.participants.add(request.user, friend_request.from_user)
 
@@ -427,10 +446,15 @@ class RespondFriendRequestView(views.APIView):
         return Response({"error": "Неверное действие. Используйте 'accept' или 'reject'."}, status=400)
 
 
-# 4. Получить список текущих друзей
+@extend_schema_view(
+    get=extend_schema(
+        summary="Список друзей",
+        description="Возвращает список подтвержденных друзей текущего пользователя."
+    )
+)
 class ListFriendsView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
-    serializer_class = UserSerializer  # Используем обычный сериализатор юзера
+    serializer_class = UserSerializer
 
     def get_queryset(self):
         return self.request.user.friends.all()

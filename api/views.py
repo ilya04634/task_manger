@@ -458,3 +458,73 @@ class ListFriendsView(generics.ListAPIView):
 
     def get_queryset(self):
         return self.request.user.friends.all()
+
+
+# Добавь в импорты Q, если его еще нет
+from django.db.models import Q
+
+
+# --- УДАЛЕНИЕ ИЗ ДРУЗЕЙ ---
+class UnfriendView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Удалить из друзей",
+        description="Удаляет пользователя из списка друзей и очищает историю заявок, чтобы их можно было отправить снова.",
+        responses={
+            204: OpenApiResponse(description="Успешно удален"),
+            400: OpenApiResponse(description="Пользователь не в списке друзей"),
+            404: OpenApiResponse(description="Пользователь не найден")
+        }
+    )
+    def delete(self, request, username):
+        friend = get_object_or_404(User, username=username)
+
+        if not request.user.friends.filter(id=friend.id).exists():
+            return Response({"error": "Этот пользователь не является вашим другом."}, status=400)
+
+        # Удаляем из ManyToMany (благодаря symmetrical=True удалится у обоих)
+        request.user.friends.remove(friend)
+
+        # Удаляем записи о заявках, чтобы обнулить историю отношений
+        FriendRequest.objects.filter(
+            (Q(from_user=request.user) & Q(to_user=friend)) |
+            (Q(from_user=friend) & Q(to_user=request.user))
+        ).delete()
+
+        return Response(status=204)
+
+
+# --- УДАЛЕНИЕ УЧАСТНИКА ИЗ ПРОЕКТА ---
+class ProjectRemoveMemberView(views.APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        summary="Удалить участника из проекта",
+        description="Удаляет пользователя из участников проекта и из списка админов проекта. Доступно админам проекта или модераторам.",
+        responses={
+            200: OpenApiResponse(description="Участник удален"),
+            403: OpenApiResponse(description="Нет прав"),
+            404: OpenApiResponse(description="Проект или пользователь не найден")
+        }
+    )
+    def delete(self, request, pk, user_id):
+        from .models import Project  # Убедись, что импорт есть
+        project = get_object_or_404(Project, id=pk)
+
+        # Проверка прав: только админ проекта или глобальный модератор
+        is_admin = project.admins.filter(id=request.user.id).exists()
+        if not is_admin and request.user.role != 'MODERATOR':
+            return Response({"error": "Только админы проекта могут удалять участников."}, status=403)
+
+        user_to_remove = get_object_or_404(User, id=user_id)
+
+        # Защита: нельзя удалить последнего админа
+        if project.admins.filter(id=user_to_remove.id).exists() and project.admins.count() == 1:
+            return Response({"error": "Нельзя удалить последнего администратора проекта."}, status=400)
+
+        # Удаляем из участников и из админов
+        project.members.remove(user_to_remove)
+        project.admins.remove(user_to_remove)
+
+        return Response({"message": f"Пользователь {user_to_remove.username} удален из проекта."})

@@ -7,7 +7,8 @@ from api.views import RegisterView, ManageProfileView
 from api.views import ChangePasswordView
 from api.views import (
     SendFriendRequestView, IncomingRequestsView,
-    RespondFriendRequestView, ListFriendsView
+    RespondFriendRequestView, ListFriendsView,
+    UnfriendView, ProjectRemoveMemberView
 )
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -23,7 +24,8 @@ urlpatterns = [
     path('api/users/friends/', ListFriendsView.as_view(), name='list_friends'),
     path('api/users/friends/request/<str:username>/', SendFriendRequestView.as_view(), name='send_request'),
     path('api/users/friends/requests/incoming/', IncomingRequestsView.as_view(), name='incoming_requests'),
-
+    path('api/users/friends/<str:username>/', UnfriendView.as_view(), name='unfriend'),
+    path('api/projects/<int:pk>/members/<int:user_id>/', ProjectRemoveMemberView.as_view(), name='project_remove_member'),
     # action должен быть строкой: 'accept' или 'reject'
     path('api/users/friends/requests/<int:pk>/<str:action>/', RespondFriendRequestView.as_view(),
          name='respond_request'),
